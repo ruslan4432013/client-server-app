@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 chardet = "*"
 pyyaml = "*"
+websockets = "*"
 
 [dev-packages]
 
