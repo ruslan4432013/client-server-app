@@ -63,7 +63,8 @@ async def handler(websocket, path):
 
 
 async def main():
-    async with websockets.serve(handler, *bind()):
+    listen_address, listen_port = bind()
+    async with websockets.serve(handler, listen_address, listen_port):
         await asyncio.Future()
 
 if __name__ == '__main__':
