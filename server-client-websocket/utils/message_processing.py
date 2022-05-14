@@ -1,7 +1,7 @@
 import json
 
 from websockets.legacy.client import WebSocketClientProtocol
-from config.settings import ENCODING, MAX_PACKAGE_LENGTH
+from config.settings import ENCODING
 
 
 async def get_message(client: WebSocketClientProtocol):

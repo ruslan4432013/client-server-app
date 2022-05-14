@@ -1,5 +1,4 @@
 import asyncio
-import socket
 import sys
 import json
 
@@ -12,8 +11,13 @@ from utils.message_processing import get_message
 
 
 def process_client_message(message):
-    if ACTION in message and message[ACTION] == PRESENCE and TIME in message \
-            and USER in message and message[USER][ACCOUNT_NAME] == 'Guest':
+    correct_message = all((TIME in message,
+                           USER in message,
+                           ACTION in message,
+                           message[ACTION] == PRESENCE,
+                           message[USER][ACCOUNT_NAME] == 'Guest'))
+
+    if correct_message:
         return {RESPONSE: 200}
     return {
         RESPONSE: 400,
@@ -67,6 +71,6 @@ async def main():
     async with websockets.serve(handler, listen_address, listen_port):
         await asyncio.Future()
 
+
 if __name__ == '__main__':
     asyncio.run(main())
-
