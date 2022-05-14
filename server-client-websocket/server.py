@@ -11,11 +11,15 @@ from utils.message_processing import get_message
 
 
 def process_client_message(message):
+    correct_action = message[ACTION] == PRESENCE if ACTION in message else False
+
+    correct_account_name = message[USER][ACCOUNT_NAME] == 'Guest' if USER in message else False
+
     correct_message = all((TIME in message,
                            USER in message,
                            ACTION in message,
-                           message[ACTION] == PRESENCE,
-                           message[USER][ACCOUNT_NAME] == 'Guest'))
+                           correct_action,
+                           correct_account_name))
 
     if correct_message:
         return {RESPONSE: 200}
