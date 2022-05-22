@@ -8,11 +8,13 @@ from log import server_log_config
 from client import send_message
 from config.settings import DEFAULT_PORT, MAX_CONNECTIONS
 from config.varibales_jim_protocol import ACTION, PRESENCE, ACCOUNT_NAME, USER, TIME, RESPONSE, ERROR
+from utils.decorators import log, Log
 from utils.message_processing import get_message
 
 logger = logging.getLogger('server')
 
 
+@Log()
 def process_client_message(message):
     correct_action = message[ACTION] == PRESENCE if ACTION in message else False
 
@@ -35,6 +37,7 @@ def process_client_message(message):
     }
 
 
+@Log()
 def bind():
     try:
         if '-p' in sys.argv:
