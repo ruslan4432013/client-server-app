@@ -4,9 +4,12 @@ import json
 
 import websockets
 import logging
+
+from websockets.legacy.server import WebSocketServerProtocol
+
 from log import server_log_config
 from client import send_message
-from config.settings import DEFAULT_PORT, MAX_CONNECTIONS
+from config.settings import DEFAULT_PORT, MAX_CONNECTIONS, DEFAULT_IP_ADDRESS
 from config.varibales_jim_protocol import ACTION, PRESENCE, ACCOUNT_NAME, USER, TIME, RESPONSE, ERROR
 from utils.decorators import log, Log
 from utils.message_processing import get_message
@@ -68,15 +71,16 @@ def bind():
 
 
 async def handler(websocket, path):
-    try:
-        message_from_client = await get_message(websocket)
-        logger.info(f'get message message: {message_from_client}')
+    while True:
+        try:
+            message_from_client = await get_message(websocket)
+            print(f'get message message: {message_from_client}')
 
-        response = process_client_message(message_from_client)
-        await send_message(websocket, response)
+            response = process_client_message(message_from_client)
+            await send_message(websocket, response)
 
-    except (ValueError, json.JSONDecodeError):
-        logger.error('Принято некорректное сообщение от клиента.')
+        except (ValueError, json.JSONDecodeError):
+            logger.error('Принято некорректное сообщение от клиента.')
 
 
 async def main():
@@ -85,5 +89,35 @@ async def main():
         await asyncio.Future()
 
 
+class Server:
+    clients = set()
+
+    async def register(self, ws: WebSocketServerProtocol):
+        self.clients.add(ws)
+        logger.info(f'{ws.remote_address} connects')
+
+    async def unregister(self, ws: WebSocketServerProtocol):
+        self.clients.remove(ws)
+
+    async def send_to_clients(self, message: str):
+        if self.clients:
+            await asyncio.gather(*[client.send(message) for client in self.clients])
+
+    async def ws_handler(self, ws: WebSocketServerProtocol, uri: str):
+        await self.register(ws)
+        try:
+            await self.distribute(ws)
+        finally:
+            await self.unregister(ws)
+
+    async def distribute(self, ws: WebSocketServerProtocol):
+        async for message in ws:
+            await self.send_to_clients(message)
+
+
 if __name__ == '__main__':
-    asyncio.run(main())
+    server = Server()
+    start_server = websockets.serve(server.ws_handler, DEFAULT_IP_ADDRESS, DEFAULT_PORT)
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(start_server)
+    loop.run_forever()

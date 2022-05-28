@@ -1,15 +1,23 @@
+import argparse
 import asyncio
 import json
 import sys
 import time
+from asyncio import start_server
+from concurrent.futures import ThreadPoolExecutor
 
 import websockets
 import logging
+
+from websockets.legacy.client import WebSocketClientProtocol
+from websockets.legacy.server import WebSocketServerProtocol
+
 from log import client_log_config
 from utils.decorators import log
 from config.settings import DEFAULT_IP_ADDRESS, DEFAULT_PORT
-from config.varibales_jim_protocol import ACTION, PRESENCE, TIME, USER, ACCOUNT_NAME, RESPONSE, ERROR
-from utils.message_processing import get_message, send_message
+from config.varibales_jim_protocol import ACTION, PRESENCE, TIME, USER, ACCOUNT_NAME, RESPONSE, ERROR, MESSAGE, SENDER, \
+    MESSAGE_TEXT
+from utils.message_processing import get_message, send_message, create_message
 
 logger = logging.getLogger('client')
 
@@ -35,6 +43,11 @@ async def process_ans(message):
     raise ValueError
 
 
+async def ainput(prompt: str = "") -> str:
+    with ThreadPoolExecutor(1, "AsyncInput") as executor:
+        return await asyncio.get_event_loop().run_in_executor(executor, input, prompt)
+
+
 async def main():
     try:
         server_address = sys.argv[1]
@@ -51,15 +64,17 @@ async def main():
     websocket_resource_url = f"ws://{server_address}:{server_port}"
     message_to_server = await create_presence()
     async with websockets.connect(websocket_resource_url) as ws:
-        await send_message(ws, message_to_server)
-
-        logger.info(f'message: {message_to_server} was sending')
         try:
-            message = await get_message(ws)
-            answer = await process_ans(message)
-            logger.info(answer)
+            while True:
+                message = await ainput("Enter your message: ")
+                await ws.send(message)
+                print(await ws.recv())
+
         except (ValueError, json.JSONDecodeError):
             logger.error('Не удалось декодировать сообщение сервера.')
+
+
+
 
 
 if __name__ == '__main__':
