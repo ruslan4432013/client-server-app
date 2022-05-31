@@ -56,7 +56,7 @@ def arg_parser():
 
 def main():
     listen_address, listen_port = arg_parser()
-
+    print('server is running')
     logger.info(
         f'Server started, connection port: {listen_port}, '
         f'address from which connections are accepted:{listen_address}. '
@@ -119,7 +119,7 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-        print('server is running')
+
     except Exception as e:
         print(e)
         input('Press any key to exit')

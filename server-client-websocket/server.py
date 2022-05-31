@@ -5,114 +5,109 @@ import json
 import websockets
 import logging
 
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+from websockets.legacy.client import WebSocketClientProtocol
 from websockets.legacy.server import WebSocketServerProtocol
 
 from log import server_log_config
-from client import send_message
+from utils.message_processing import send_message
 from config.settings import DEFAULT_PORT, MAX_CONNECTIONS, DEFAULT_IP_ADDRESS
-from config.varibales_jim_protocol import ACTION, PRESENCE, ACCOUNT_NAME, USER, TIME, RESPONSE, ERROR
+from config.varibales_jim_protocol import ACTION, PRESENCE, ACCOUNT_NAME, USER, TIME, RESPONSE, ERROR, RESPONSE_200, \
+    RESPONSE_400, MESSAGE, DESTINATION, SENDER, MESSAGE_TEXT, EXIT
 from utils.decorators import log, Log
-from utils.message_processing import get_message
+from utils.message_processing import parse_the_message
 
 logger = logging.getLogger('server')
 
 
-@Log()
-def process_client_message(message):
-    correct_action = message[ACTION] == PRESENCE if ACTION in message else False
-
-    correct_account_name = message[USER][ACCOUNT_NAME] == 'Guest' if USER in message else False
-
-    correct_message = all((TIME in message,
-                           USER in message,
-                           ACTION in message,
-                           correct_action,
-                           correct_account_name))
-
-    if correct_message:
-        logger.info('get correct message')
-        return {RESPONSE: 200}
-
-    logger.warning(f'get incorrect message: {message}')
-    return {
-        RESPONSE: 400,
-        ERROR: 'Bad Request'
-    }
-
-
-@Log()
-def bind():
+@log
+async def process_client_message(message, messages_list, client, clients, names):
+    """
+    Обработчик сообщений от клиентов, принимает словарь - сообщение от клиента,
+    проверяет корректность, отправляет словарь-ответ в случае необходимости.
+    :param message:
+    :param messages_list:
+    :param client:
+    :param clients:
+    :param names:
+    :return:
+    """
+    logger.debug(f'Разбор сообщения от клиента : {message}')
+    # Если это сообщение о присутствии, принимаем и отвечаем
     try:
-        if '-p' in sys.argv:
-            listen_port = int(sys.argv[sys.argv.index('-p') + 1])
+        if ACTION in message and message[ACTION] == PRESENCE and \
+                TIME in message and USER in message:
+            # Если такой пользователь ещё не зарегистрирован,
+            # регистрируем, иначе отправляем ответ и завершаем соединение.
+            if message[USER][ACCOUNT_NAME] not in names.keys():
+                names[message[USER][ACCOUNT_NAME]] = client
+                await send_message(client, RESPONSE_200)
+            else:
+                response = RESPONSE_400
+                response[ERROR] = 'Имя пользователя уже занято.'
+                await send_message(client, response)
+                clients.remove(client)
+                await client.close()
+            return
+        # Если это сообщение, то добавляем его в очередь сообщений.
+        # Ответ не требуется.
+        elif ACTION in message and message[ACTION] == MESSAGE and \
+                DESTINATION in message and TIME in message \
+                and SENDER in message and MESSAGE_TEXT in message:
+            messages_list.append(message)
+            return
+        # Если клиент выходит
+        elif ACTION in message and message[ACTION] == EXIT and ACCOUNT_NAME in message:
+            clients.remove(names[message[ACCOUNT_NAME]])
+            await names[message[ACCOUNT_NAME]].close()
+            del names[message[ACCOUNT_NAME]]
+            return
+        # Иначе отдаём Bad request
         else:
-            listen_port = DEFAULT_PORT
-        if listen_port < 1024 or listen_port > 65535:
-            raise ValueError
-    except IndexError:
-        logger.error('После параметра -\'p\' необходимо указать номер порта.')
-        sys.exit(1)
-    except ValueError:
-        logger.error('В качестве порта может быть указано только число в диапазоне от 1024 до 65535.')
-        sys.exit(1)
-
-    try:
-        if '-a' in sys.argv:
-            listen_address = sys.argv[sys.argv.index('-a') + 1]
-        else:
-            listen_address = 'localhost'
-
-    except IndexError:
-        logger.error('После параметра \'a\'- необходимо указать адрес, который будет слушать сервер.')
-        sys.exit(1)
-
-    logger.info(f'ws://{listen_address}:{listen_port} was created')
-    return listen_address, listen_port
-
-
-async def handler(websocket, path):
-    while True:
-        try:
-            message_from_client = await get_message(websocket)
-            print(f'get message message: {message_from_client}')
-
-            response = process_client_message(message_from_client)
-            await send_message(websocket, response)
-
-        except (ValueError, json.JSONDecodeError):
-            logger.error('Принято некорректное сообщение от клиента.')
-
-
-async def main():
-    listen_address, listen_port = bind()
-    async with websockets.serve(handler, listen_address, listen_port):
-        await asyncio.Future()
+            response = RESPONSE_400
+            response[ERROR] = 'Запрос некорректен.'
+            await send_message(client, response)
+            return
+    except ConnectionClosedOK:
+        clients.remove(names[message[ACCOUNT_NAME]])
+        del names[message[ACCOUNT_NAME]]
 
 
 class Server:
-    clients = set()
+    clients = []
+    messages = []
+    names = dict()
 
     async def register(self, ws: WebSocketServerProtocol):
-        self.clients.add(ws)
+        self.clients.append(ws)
+        print('connected')
         logger.info(f'{ws.remote_address} connects')
-
-    async def unregister(self, ws: WebSocketServerProtocol):
-        self.clients.remove(ws)
 
     async def send_to_clients(self, message: str):
         if self.clients:
-            await asyncio.gather(*[client.send(message) for client in self.clients])
+            await asyncio.gather(*(self.send_to_client(client, message) for client in self.clients))
+
+    async def send_to_client(self, client: WebSocketClientProtocol, message):
+        await process_client_message(message, self.messages, client, self.clients, self.names)
+        await client.send(json.dumps(message))
+        print('sending')
 
     async def ws_handler(self, ws: WebSocketServerProtocol, uri: str):
         await self.register(ws)
         try:
             await self.distribute(ws)
-        finally:
-            await self.unregister(ws)
+
+        # В случае, если клиент отключился
+        except ConnectionClosedError:
+            logger.info(f'Client {ws.remote_address} close connection')
 
     async def distribute(self, ws: WebSocketServerProtocol):
         async for message in ws:
-            await self.send_to_clients(message)
+            print(message)
+
+            message_from_client = await parse_the_message(message)
+            await self.send_to_clients(message_from_client)
+            print(self.messages)
 
 
 if __name__ == '__main__':
