@@ -10,7 +10,6 @@ from asyncio import AbstractEventLoop, get_event_loop
 import websockets
 import logging
 
-from gevent._ffi.loop import AbstractLoop
 from websockets.exceptions import ConnectionClosedOK
 
 from threading import Thread
@@ -25,7 +24,6 @@ from utils.message_processing import get_message, send_message, create_message, 
 
 logger = logging.getLogger('client')
 
-lock = asyncio.Lock()
 
 async def print_help():
     """Функция выводящяя справку по использованию"""
@@ -48,12 +46,9 @@ async def create_exit_message(account_name):
 @log
 async def message_from_server(ws, my_username):
     """Функция - обработчик сообщений других пользователей, поступающих с сервера"""
-
     while True:
         try:
             message = await ws.recv()
-            print(message)
-            print('no receiver')
             message = await parse_the_message(message)
             if ACTION in message and message[ACTION] == MESSAGE and \
                     SENDER in message and DESTINATION in message \
@@ -67,11 +62,9 @@ async def message_from_server(ws, my_username):
         except IncorrectDataRecivedError:
             logger.error(f'Не удалось декодировать полученное сообщение.')
         except (OSError, ConnectionError, ConnectionAbortedError,
-                ConnectionResetError, json.JSONDecodeError):
+                ConnectionResetError, json.JSONDecodeError, ConnectionClosedOK):
             logger.critical(f'Потеряно соединение с сервером.')
             break
-        except ValueError:
-            pass
 
 
 @log
@@ -123,6 +116,7 @@ async def user_interactive(ws, username):
     """Функция взаимодействия с пользователем, запрашивает команды, отправляет сообщения"""
     await print_help()
     while True:
+
         command = input('Введите команду: ')
         if command == 'message':
             await create_message(ws, username)
@@ -253,14 +247,7 @@ async def main():
                 # ввёл exit. Поскольку все события обработываются в потоках,
                 # достаточно просто завершить цикл.
 
-                while True:
-                    time.sleep(1)
-                    if user_interface.is_alive():
-                        async with lock:
-                            await message_from_server(ws, client_name)
-                        continue
-
-                    break
+                await message_from_server(ws, client_name)
 
 
         except (ValueError, json.JSONDecodeError):
@@ -268,4 +255,8 @@ async def main():
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(main())
+    except Exception as e:
+        print(e)

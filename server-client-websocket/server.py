@@ -73,6 +73,28 @@ async def process_client_message(message, messages_list, client, clients, names)
         del names[message[ACCOUNT_NAME]]
 
 
+@log
+async def process_message(message, names, listen_socks):
+    """
+    Функция адресной отправки сообщения определённому клиенту. Принимает словарь сообщение,
+    список зарегистрированых пользователей и слушающие сокеты. Ничего не возвращает.
+    :param message:
+    :param names:
+    :param listen_socks:
+    :return:
+    """
+    if message[DESTINATION] in names and names[message[DESTINATION]] in listen_socks:
+        await send_message(names[message[DESTINATION]], message)
+        logger.info(f'Отправлено сообщение пользователю {message[DESTINATION]} '
+                    f'от пользователя {message[SENDER]}.')
+    elif message[DESTINATION] in names and names[message[DESTINATION]] not in listen_socks:
+        raise ConnectionError
+    else:
+        logger.error(
+            f'Пользователь {message[DESTINATION]} не зарегистрирован на сервере, '
+            f'отправка сообщения невозможна.')
+
+
 class Server:
     clients = []
     messages = []
@@ -80,17 +102,8 @@ class Server:
 
     async def register(self, ws: WebSocketServerProtocol):
         self.clients.append(ws)
-        print('connected')
         logger.info(f'{ws.remote_address} connects')
 
-    async def send_to_clients(self, message: str):
-        if self.clients:
-            await asyncio.gather(*(self.send_to_client(client, message) for client in self.clients))
-
-    async def send_to_client(self, client: WebSocketClientProtocol, message):
-        await process_client_message(message, self.messages, client, self.clients, self.names)
-        await client.send(json.dumps(message))
-        print('sending')
 
     async def ws_handler(self, ws: WebSocketServerProtocol, uri: str):
         await self.register(ws)
@@ -103,11 +116,19 @@ class Server:
 
     async def distribute(self, ws: WebSocketServerProtocol):
         async for message in ws:
-            print(message)
 
             message_from_client = await parse_the_message(message)
-            await self.send_to_clients(message_from_client)
-            print(self.messages)
+            await process_client_message(message_from_client, self.messages, ws, self.clients, self.names)
+
+            if self.messages:
+                for i in self.messages:
+                    try:
+                        await process_message(i, self.names, self.clients)
+                    except Exception:
+                        logger.info(f'Связь с клиентом с именем {i[DESTINATION]} была потеряна')
+                        self.clients.remove(self.names[i[DESTINATION]])
+                        del self.names[i[DESTINATION]]
+                self.messages.clear()
 
 
 if __name__ == '__main__':
