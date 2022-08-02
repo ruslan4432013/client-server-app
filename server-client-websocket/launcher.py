@@ -18,7 +18,6 @@ while True:
             '-e',
             p])
         )
-        print(p)
         time.sleep(0.1)
         for i in range(2):
             p = f'python3 "{catalog}/client.py"'
@@ -27,7 +26,6 @@ while True:
                 '-e',
                 p])
             )
-            print(p)
             time.sleep(0.1)
         for i in range(5):
             p = f'python3 "{catalog}/client.py"'
@@ -36,7 +34,6 @@ while True:
                 '-e',
                 p])
             )
-            print(p)
             time.sleep(0.1)
     elif ACTION == 'x':
         while PROCESS:
