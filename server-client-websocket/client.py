@@ -1,11 +1,10 @@
 import argparse
 import asyncio
-import concurrent.futures
 import json
 import sys
 
 import time
-from asyncio import AbstractEventLoop, get_event_loop
+from abc import ABC
 
 import websockets
 import logging
@@ -20,51 +19,10 @@ from utils.decorators import log
 from config.settings import DEFAULT_IP_ADDRESS, DEFAULT_PORT
 from config.varibales_jim_protocol import ACTION, PRESENCE, TIME, USER, ACCOUNT_NAME, RESPONSE, ERROR, EXIT, MESSAGE, \
     SENDER, MESSAGE_TEXT, DESTINATION
-from utils.message_processing import get_message, send_message, create_message, parse_the_message
+from utils.message_processing import get_message, send_message, parse_the_message
+from utils.metaclasses import ClientMaker
 
 logger = logging.getLogger('client')
-
-
-async def print_help():
-    """Функция выводящяя справку по использованию"""
-    print('Поддерживаемые команды:')
-    print('message - отправить сообщение. Кому и текст будет запрошены отдельно.')
-    print('help - вывести подсказки по командам')
-    print('exit - выход из программы')
-
-
-@log
-async def create_exit_message(account_name):
-    """Функция создаёт словарь с сообщением о выходе"""
-    return {
-        ACTION: EXIT,
-        TIME: time.time(),
-        ACCOUNT_NAME: account_name
-    }
-
-
-@log
-async def message_from_server(ws, my_username):
-    """Функция - обработчик сообщений других пользователей, поступающих с сервера"""
-    while True:
-        try:
-            message = await ws.recv()
-            message = await parse_the_message(message)
-            if ACTION in message and message[ACTION] == MESSAGE and \
-                    SENDER in message and DESTINATION in message \
-                    and MESSAGE_TEXT in message and message[DESTINATION] == my_username:
-                print(f'\nПолучено сообщение от пользователя {message[SENDER]}:'
-                      f'\n{message[MESSAGE_TEXT]}')
-                logger.info(f'Получено сообщение от пользователя {message[SENDER]}:'
-                            f'\n{message[MESSAGE_TEXT]}')
-            else:
-                logger.error(f'Получено некорректное сообщение с сервера: {message}')
-        except IncorrectDataRecivedError:
-            logger.error(f'Не удалось декодировать полученное сообщение.')
-        except (OSError, ConnectionError, ConnectionAbortedError,
-                ConnectionResetError, json.JSONDecodeError, ConnectionClosedOK):
-            logger.critical(f'Потеряно соединение с сервером.')
-            break
 
 
 @log
@@ -82,55 +40,6 @@ async def process_response_ans(message):
         elif message[RESPONSE] == 400:
             raise ServerError(f'400 : {message[ERROR]}')
     raise ReqFieldMissingError(RESPONSE)
-
-
-@log
-async def create_message(ws, account_name='Guest'):
-    """
-    Функция запрашивает кому отправить сообщение и само сообщение,
-    и отправляет полученные данные на сервер
-    :param ws:
-    :param account_name:
-    :return:
-    """
-    to_user = input('Введите получателя сообщения: ')
-    message = input('Введите сообщение для отправки: ')
-    message_dict = {
-        ACTION: MESSAGE,
-        SENDER: account_name,
-        DESTINATION: to_user,
-        TIME: time.time(),
-        MESSAGE_TEXT: message
-    }
-    logger.debug(f'Сформирован словарь сообщения: {message_dict}')
-    try:
-        await send_message(ws, message_dict)
-        logger.info(f'Отправлено сообщение для пользователя {to_user}')
-    except:
-        logger.critical('Потеряно соединение с сервером.')
-        sys.exit(1)
-
-
-@log
-async def user_interactive(ws, username):
-    """Функция взаимодействия с пользователем, запрашивает команды, отправляет сообщения"""
-    await print_help()
-    while True:
-
-        command = input('Введите команду: ')
-        if command == 'message':
-            await create_message(ws, username)
-        elif command == 'help':
-            await print_help()
-        elif command == 'exit':
-            await send_message(ws, await create_exit_message(username))
-            print('Завершение соединения.')
-            logger.info('Завершение работы по команде пользователя.')
-            # Задержка неоходима, чтобы успело уйти сообщение о выходе
-            await asyncio.sleep(0.5)
-            break
-        else:
-            print('Команда не распознана, попробойте снова. help - вывести поддерживаемые команды.')
 
 
 @log
@@ -183,9 +92,106 @@ class Executor(Thread):
         self.args = args
 
     def run(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.target(*self.args))
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        new_loop.run_until_complete(self.target(*self.args))
+
+
+class Client:
+    def __init__(self, account_name, ws):
+        self.account_name = account_name
+        self.ws = ws
+
+
+class ClientSender(Client, metaclass=ClientMaker):
+
+    async def create_exit_message(self):
+        """Функция создаёт словарь с сообщением о выходе"""
+        return {
+            ACTION: EXIT,
+            TIME: time.time(),
+            ACCOUNT_NAME: self.account_name
+        }
+
+    async def create_message(self):
+        """
+        Функция запрашивает кому отправить сообщение и само сообщение,
+        и отправляет полученные данные на сервер
+        """
+        to_user = input('Введите получателя сообщения: ')
+        message = input('Введите сообщение для отправки: ')
+        message_dict = {
+            ACTION: MESSAGE,
+            SENDER: self.account_name,
+            DESTINATION: to_user,
+            TIME: time.time(),
+            MESSAGE_TEXT: message
+        }
+        logger.debug(f'Сформирован словарь сообщения: {message_dict}')
+        try:
+            await send_message(self.ws, message_dict)
+            logger.info(f'Отправлено сообщение для пользователя {to_user}')
+        except Exception as e:
+            print(e)
+            logger.critical('Потеряно соединение с сервером.')
+            sys.exit(1)
+
+    async def user_interactive(self):
+        """Функция взаимодействия с пользователем, запрашивает команды, отправляет сообщения"""
+        await ClientSender.print_help()
+        while True:
+
+            command = input('Введите команду: ')
+            if command == 'message':
+                await self.create_message()
+            elif command == 'help':
+                await ClientSender.print_help()
+            elif command == 'exit':
+                await send_message(self.ws, await self.create_exit_message())
+                print('Завершение соединения.')
+                logger.info('Завершение работы по команде пользователя.')
+                # Задержка неоходима, чтобы успело уйти сообщение о выходе
+                await asyncio.sleep(0.5)
+                break
+            else:
+                print('Команда не распознана, попробойте снова. help - вывести поддерживаемые команды.')
+
+    @staticmethod
+    async def print_help():
+        """Функция выводящяя справку по использованию"""
+        print('Поддерживаемые команды:')
+        print('message - отправить сообщение. Кому и текст будет запрошены отдельно.')
+        print('help - вывести подсказки по командам')
+        print('exit - выход из программы')
+
+    def run(self):
+        user_interface = Executor(target=self.user_interactive, args=())
+        user_interface.daemon = True
+        user_interface.start()
+
+
+class ClientReader(Client, metaclass=ClientMaker):
+
+    async def message_from_server(self):
+        """Функция - обработчик сообщений других пользователей, поступающих с сервера"""
+        while True:
+            try:
+                message = await get_message(self.ws)
+                if ACTION in message and message[ACTION] == MESSAGE and \
+                        SENDER in message and DESTINATION in message \
+                        and MESSAGE_TEXT in message and message[DESTINATION] == self.account_name:
+                    print(f'\nПолучено сообщение от пользователя {message[SENDER]}:'
+                          f'\n{message[MESSAGE_TEXT]}')
+                    logger.info(f'Получено сообщение от пользователя {message[SENDER]}:'
+                                f'\n{message[MESSAGE_TEXT]}')
+                else:
+                    logger.error(f'Получено некорректное сообщение с сервера: {message}')
+            except IncorrectDataRecivedError:
+                logger.error(f'Не удалось декодировать полученное сообщение.')
+            except (OSError, ConnectionError, ConnectionAbortedError,
+                    ConnectionResetError, json.JSONDecodeError, ConnectionClosedOK):
+                logger.critical(f'Потеряно соединение с сервером.')
+                break
 
 
 async def main():
@@ -208,7 +214,7 @@ async def main():
             # Инициализация сокета и сообщение серверу о нашем появлении
             try:
                 await send_message(ws, await create_presence(client_name))
-
+                    
                 answer = await process_response_ans(await get_message(ws))
 
                 logger.info(f'Установлено соединение с сервером. Ответ сервера: {answer}')
@@ -236,10 +242,7 @@ async def main():
                 # запускаем клиенский процесс приёма сообщний
 
                 # затем запускаем отправку сообщений и взаимодействие с пользователем.
-                user_interface = Executor(target=user_interactive, args=(ws, client_name))
-                user_interface.daemon = True
-                user_interface.start()
-
+                ClientSender(client_name, ws).run()
                 # затем запускаем отправку сообщений и взаимодействие с пользователем.
 
                 # Watchdog основной цикл, если один из потоков завершён,
@@ -247,8 +250,7 @@ async def main():
                 # ввёл exit. Поскольку все события обработываются в потоках,
                 # достаточно просто завершить цикл.
 
-                await message_from_server(ws, client_name)
-
+                await ClientReader(client_name, ws).message_from_server()
 
         except (ValueError, json.JSONDecodeError):
             logger.error('Не удалось декодировать сообщение сервера.')
