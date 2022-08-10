@@ -8,6 +8,12 @@ from config.settings import LOGGING_LEVEL
 
 # Настраиваем путь
 PATH = Path(__file__).resolve().parent.parent
+
+PATH_TO_SERVER = os.path.join(PATH, 'logs', 'server')
+
+if not os.path.exists(PATH_TO_SERVER):
+    os.makedirs(PATH_TO_SERVER)
+
 PATH = os.path.join(PATH, 'logs', 'server', 'server.log')
 
 # Настраиваем формат сообщений

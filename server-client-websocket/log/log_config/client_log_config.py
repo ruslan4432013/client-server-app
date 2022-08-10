@@ -8,6 +8,12 @@ from config.settings import LOGGING_LEVEL
 
 # Настраиваем путь
 PATH = Path(__file__).resolve().parent.parent
+
+PATH_TO_CLIENT = os.path.join(PATH, 'logs', 'client')
+
+if not os.path.exists(PATH_TO_CLIENT):
+    os.makedirs(PATH_TO_CLIENT)
+
 PATH = os.path.join(PATH, 'logs', 'client', 'client.log')
 
 # Настраиваем формат сообщений
@@ -17,7 +23,6 @@ _formatter = logging.Formatter('%(asctime)s %(levelname)s %(module)s %(message)s
 file_handler = logging.FileHandler(PATH, encoding='UTF-8')
 file_handler.setFormatter(_formatter)
 file_handler.setLevel(logging.INFO)
-
 
 # Создаем логгер и настраиваем его
 logger = logging.getLogger('client')
