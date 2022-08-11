@@ -7,6 +7,8 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from websockets.legacy.server import WebSocketServerProtocol
 
+from client import Executor
+from database.server_db_utils import ServerStorage
 from utils.descriptors import Port
 from utils.message_processing import send_message
 from config.settings import DEFAULT_PORT, DEFAULT_IP_ADDRESS
@@ -15,12 +17,16 @@ from config.varibales_jim_protocol import (ACTION, PRESENCE, ACCOUNT_NAME, USER,
 from utils.message_processing import parse_the_message
 from utils.metaclasses import ServerMaker
 
+# SQLAlchemy imports
+from database.server_database import async_session
+from sqlalchemy.future import select
+
 logger = logging.getLogger('server')
 
 
 class Server(metaclass=ServerMaker):
-
     port = Port()
+    database = ServerStorage(session=async_session)
 
     def __init__(self, listen_address=DEFAULT_IP_ADDRESS, listen_port=DEFAULT_PORT):
         self.addr = listen_address
@@ -28,12 +34,21 @@ class Server(metaclass=ServerMaker):
         self.clients = []
         self.messages = []
         self.names = dict()
+        self.loop = asyncio.get_event_loop()
+        user_interface = Executor(target=self.get_info_from_db_by_command, args=())
+        user_interface.daemon = True
+        user_interface.start()
 
     def start(self):
         start_server = websockets.serve(self.ws_handler, self.addr, self.port)
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(start_server)
-        loop.run_forever()
+        self.loop.run_until_complete(self.database.init_db())
+        self.loop.run_until_complete(start_server)
+        self.loop.run_forever()
+
+    # Специальный метод, для удаления всех активных пользователей из бд
+    async def stop(self):
+        for login in self.names.keys():
+            await self.database.user_logout(login)
 
     async def register(self, ws: WebSocketServerProtocol):
         self.clients.append(ws)
@@ -47,6 +62,11 @@ class Server(metaclass=ServerMaker):
         # В случае, если клиент отключился
         except ConnectionClosedError:
             logger.info(f'Client {ws.remote_address} close connection')
+
+            login = list(self.names.keys())[list(self.names.values()).index(ws)]
+
+            del self.names[login]
+            await self.database.user_logout(login)
 
     async def distribute(self, ws: WebSocketServerProtocol):
         async for message in ws:
@@ -85,8 +105,7 @@ class Server(metaclass=ServerMaker):
                 f'Пользователь {message[DESTINATION]} не зарегистрирован на сервере, '
                 f'отправка сообщения невозможна.')
 
-    @staticmethod
-    async def process_client_message(message, messages_list, client, clients, names):
+    async def process_client_message(self, message, messages_list, client, clients, names):
         """
         Обработчик сообщений от клиентов, принимает словарь - сообщение от клиента,
         проверяет корректность, отправляет словарь-ответ в случае необходимости.
@@ -105,7 +124,15 @@ class Server(metaclass=ServerMaker):
                 # Если такой пользователь ещё не зарегистрирован,
                 # регистрируем, иначе отправляем ответ и завершаем соединение.
                 if message[USER][ACCOUNT_NAME] not in names.keys():
+
+                    # Получаем логин, ip и порт подключаемого клиента
+                    login = message[USER][ACCOUNT_NAME]
+                    ip_address, port = client.remote_address
+                    # Регистрируем пользователя в базе данных
+                    await self.database.register_client(login, ip_address, port)
+
                     names[message[USER][ACCOUNT_NAME]] = client
+
                     await send_message(client, RESPONSE_200)
                 else:
                     response = RESPONSE_400
@@ -124,6 +151,11 @@ class Server(metaclass=ServerMaker):
             # Если клиент выходит
             elif ACTION in message and message[ACTION] == EXIT and ACCOUNT_NAME in message:
                 clients.remove(names[message[ACCOUNT_NAME]])
+
+                # Удаляем пользователя из базы активных
+                login = message[ACCOUNT_NAME]
+                await self.database.user_logout(login)
+
                 await names[message[ACCOUNT_NAME]].close()
                 del names[message[ACCOUNT_NAME]]
                 return
@@ -135,9 +167,48 @@ class Server(metaclass=ServerMaker):
                 return
         except ConnectionClosedOK:
             clients.remove(names[message[ACCOUNT_NAME]])
+            login = message[ACCOUNT_NAME]
+            await self.database.user_logout(login)
             del names[message[ACCOUNT_NAME]]
+
+    async def get_info_from_db_by_command(self):
+        while True:
+            command = input('Введите команду: ')
+            if command == 'help':
+                print_help()
+            elif command == 'exit':
+                break
+            elif command == 'users':
+                for user in sorted(await self.database.users_list()):
+                    print(f'Пользователь {user[0]}, последний вход: {user[1]}')
+            elif command == 'connected':
+                for user in sorted(await self.database.active_users_list()):
+                    print(
+                        f'Пользователь {user[0]}, подключен: {user[1]}:{user[2]}, время установки соединения: {user[3]}')
+            elif command == 'loghist':
+                name = input('Введите имя пользователя для просмотра истории. '
+                             'Для вывода всей истории, просто нажмите Enter: ')
+                for user in sorted(await self.database.login_history(name)):
+                    print(f'Пользователь: {user[0]} время входа: {user[1]}. Вход с: {user[2]}:{user[3]}')
+
+
+def print_help():
+    print('Поддерживаемые комманды:')
+    print('users - список известных пользователей')
+    print('connected - список подключённых пользователей')
+    print('loghist - история входов пользователя')
+    print('exit - завершение работы сервера.')
+    print('help - вывод справки по поддерживаемым командам')
 
 
 if __name__ == '__main__':
+
     server = Server()
-    server.start()
+    try:
+        print_help()
+        server.start()
+    except Exception as e:
+        print(e)
+    finally:
+        asyncio.run(server.stop())
+        input()

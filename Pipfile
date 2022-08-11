@@ -11,6 +11,8 @@ requests = "*"
 websocket = "*"
 kwargs = "*"
 tabulate = "*"
+sqlalchemy = "*"
+aiosqlite = "*"
 
 [dev-packages]
 

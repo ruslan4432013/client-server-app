@@ -5,7 +5,7 @@ import unittest
 import websockets
 
 sys.path.append(os.path.join(os.getcwd(), '..'))
-from server import handler
+from server import Server
 from utils.message_processing import send_message, get_message
 from config.varibales_jim_protocol import ACTION, PRESENCE, TIME, USER, ACCOUNT_NAME, RESPONSE, ERROR
 
@@ -54,7 +54,7 @@ class WebSocketTest(unittest.IsolatedAsyncioTestCase):
                 self.websocket_server = await websockets.serve(echo, 'localhost', 8765)
 
             case _:
-                self.websocket_server = await websockets.serve(handler, 'localhost', 8765)
+                self.websocket_server = await websockets.serve(Server.ws_handler, 'localhost', 8765)
         self.websocket_client = await websockets.connect("ws://localhost:8765")
 
     async def test_send_message(self):
